@@ -115,9 +115,18 @@ var (
 	// matches what appears in real support tickets and logs.
 	emailPattern = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
 
-	// International and North American forms, with separators. Requires at
-	// least 9 digits so that years, ports and short ids do not match.
-	phonePattern = regexp.MustCompile(`(?:\+\d{1,3}[\s.\-]?)?(?:\(\d{1,4}\)[\s.\-]?)?\d{3,4}[\s.\-]?\d{3,4}[\s.\-]?\d{2,4}`)
+	// International and North American forms, with separators.
+	//
+	// Groups are 2-4 digits, not 3-4: an earlier version required three groups
+	// of three or more and so could not match "+44 20 7946 0958", because UK
+	// area codes are two digits. Digit-count validation, not the group shape,
+	// is what keeps this from matching years and ports.
+	phonePattern = regexp.MustCompile(`(?:\+\d{1,3}[\s.\-]?)?(?:\(\d{1,4}\)[\s.\-]?)?\d{2,4}(?:[\s.\-]?\d{2,4}){1,4}`)
+
+	// A dotted quad is an address, whatever its octets say. Without this,
+	// "10.20.300.40" is rejected by the IP validator and then picked up by the
+	// phone detector, which is a worse answer than not matching at all.
+	dottedQuadPattern = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}$`)
 
 	// 13-19 digits with optional separators. Luhn does the real work.
 	cardPattern = regexp.MustCompile(`\b(?:\d[ \-]?){13,19}\b`)
@@ -227,6 +236,9 @@ func validIPv4(s string) bool {
 // permissive so it catches formatting variety; this is where the noise is
 // removed.
 func plausiblePhone(s string) bool {
+	if dottedQuadPattern.MatchString(s) {
+		return false
+	}
 	digits := 0
 	for _, r := range s {
 		if r >= '0' && r <= '9' {

@@ -211,3 +211,18 @@ func TestARealPhoneNumberStillMatches(t *testing.T) {
 		}
 	}
 }
+
+func TestADottedQuadIsNeverAPhoneNumber(t *testing.T) {
+	// "10.20.300.40" fails IP validation on the third octet, and would then be
+	// picked up by the phone detector — a worse answer than no match at all.
+	for _, text := range []string{
+		"version 10.20.300.40 released",
+		"host 192.168.1.1 responded",
+	} {
+		for _, m := range Detect(text, DefaultDetectors()) {
+			if m.Kind == KindPhone {
+				t.Errorf("%q matched a dotted quad as a phone: %q", text, m.Value)
+			}
+		}
+	}
+}
