@@ -72,6 +72,18 @@ type Detector struct {
 	Pattern  *regexp.Regexp
 	Validate func(string) bool
 
+	// Priority breaks ties when two detectors match the identical span.
+	//
+	// Needed because "123-45-6789" is matched by both the SSN detector and the
+	// phone detector, at exactly the same offsets and the same length. Ordering
+	// by name would resolve that alphabetically, which is arbitrary — and it
+	// picked PHONE, mislabelling every SSN in the corpus.
+	//
+	// Higher wins. Rank by how much evidence the detector actually has: a
+	// checksum or an issued-range check earns a high priority, a permissive
+	// digit-group pattern earns a low one.
+	Priority int
+
 	// WholeRun rejects a match whose immediate neighbour is another digit.
 	//
 	// Without it, the phone pattern happily matches a 12-digit slice out of the
@@ -150,13 +162,16 @@ var (
 // kept stable so output diffs stay readable.
 func DefaultDetectors() []Detector {
 	return []Detector{
-		{Kind: KindEmail, Pattern: emailPattern},
-		{Kind: KindAPIKey, Pattern: apiKeyPattern},
-		{Kind: KindIBAN, Pattern: ibanPattern, Validate: validIBAN},
-		{Kind: KindCreditCard, Pattern: cardPattern, Validate: ValidLuhn},
-		{Kind: KindSSN, Pattern: ssnPattern, Validate: validSSN},
-		{Kind: KindIPAddress, Pattern: ipPattern, Validate: validIPv4},
-		{Kind: KindPhone, Pattern: phonePattern, Validate: plausiblePhone, WholeRun: true},
+		{Kind: KindEmail, Pattern: emailPattern, Priority: 100},
+		{Kind: KindAPIKey, Pattern: apiKeyPattern, Priority: 100},
+		{Kind: KindIBAN, Pattern: ibanPattern, Validate: validIBAN, Priority: 90},
+		{Kind: KindCreditCard, Pattern: cardPattern, Validate: ValidLuhn, Priority: 90},
+		{Kind: KindSSN, Pattern: ssnPattern, Validate: validSSN, Priority: 80},
+		{Kind: KindIPAddress, Pattern: ipPattern, Validate: validIPv4, Priority: 50},
+		// Lowest: the pattern is permissive by necessity, so on an exact tie any
+		// other detector has more evidence than this one does.
+		{Kind: KindPhone, Pattern: phonePattern, Validate: plausiblePhone,
+			WholeRun: true, Priority: 10},
 	}
 }
 
@@ -279,32 +294,46 @@ func validIBAN(s string) bool {
 // depends on map iteration order produces different placeholders on every run,
 // which makes caching, diffing and reversal all unreliable.
 func Detect(text string, detectors []Detector) []Match {
-	var all []Match
+	// Priority is carried alongside rather than inside Match, so the public
+	// type stays a plain description of what was found.
+	type ranked struct {
+		match    Match
+		priority int
+	}
+
+	var all []ranked
 	for _, d := range detectors {
-		all = append(all, d.Find(text)...)
+		for _, m := range d.Find(text) {
+			all = append(all, ranked{match: m, priority: d.Priority})
+		}
 	}
 
 	sort.Slice(all, func(i, j int) bool {
-		if all[i].Len() != all[j].Len() {
-			return all[i].Len() > all[j].Len()
+		if all[i].match.Len() != all[j].match.Len() {
+			return all[i].match.Len() > all[j].match.Len()
 		}
-		if all[i].Start != all[j].Start {
-			return all[i].Start < all[j].Start
+		if all[i].match.Start != all[j].match.Start {
+			return all[i].match.Start < all[j].match.Start
 		}
-		return all[i].Kind < all[j].Kind
+		if all[i].priority != all[j].priority {
+			return all[i].priority > all[j].priority
+		}
+		// Last resort, so the order is total and the output is reproducible
+		// even for two detectors that tie on everything else.
+		return all[i].match.Kind < all[j].match.Kind
 	})
 
 	var kept []Match
 	for _, candidate := range all {
 		overlaps := false
 		for _, existing := range kept {
-			if candidate.Start < existing.End && existing.Start < candidate.End {
+			if candidate.match.Start < existing.End && existing.Start < candidate.match.End {
 				overlaps = true
 				break
 			}
 		}
 		if !overlaps {
-			kept = append(kept, candidate)
+			kept = append(kept, candidate.match)
 		}
 	}
 

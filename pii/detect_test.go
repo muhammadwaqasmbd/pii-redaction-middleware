@@ -226,3 +226,29 @@ func TestADottedQuadIsNeverAPhoneNumber(t *testing.T) {
 		}
 	}
 }
+
+func TestPriorityBreaksExactTies(t *testing.T) {
+	// "123-45-6789" is matched by the SSN detector and the phone detector at
+	// identical offsets and identical length. Ordering by name resolves that
+	// alphabetically — which picked PHONE and mislabelled every SSN.
+	matches := Detect("ssn 123-45-6789 on file", DefaultDetectors())
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 match, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Kind != KindSSN {
+		t.Errorf("expected SSN to win the tie, got %s", matches[0].Kind)
+	}
+}
+
+func TestLengthStillBeatsPriority(t *testing.T) {
+	// Priority is a tie-break, not an override: a longer span from a
+	// low-priority detector must still win over a shorter high-priority one,
+	// or a partial match could carve up a longer identifier.
+	matches := Detect("call +44 20 7946 0958 now", DefaultDetectors())
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 match, got %d: %v", len(matches), matches)
+	}
+	if matches[0].Kind != KindPhone {
+		t.Errorf("expected the full phone number, got %s %q", matches[0].Kind, matches[0].Value)
+	}
+}
